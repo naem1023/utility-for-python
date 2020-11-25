@@ -1,16 +1,24 @@
 #-*- coding: utf8 -*-
 import argparse
 import re
-import jaso
+import sys
+import os
+
+# ../src/tagger/nlp/jaso.py
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))))
+from src.tagger.nlp import jaso
 
 import time
 from multiprocessing import Process, Lock, Queue, Pool
 import multiprocessing
 import parmap
+from tqdm import tqdm
 
 import operator
 import numpy as np
 from itertools import product
+from itertools import repeat
+from itertools import chain
 
 class AngleBracketError(Exception):
     def __str__(self):
@@ -31,6 +39,15 @@ class DuplicateHangeulError(Exception):
 class NotCorrectLocationHangeulError(Exception):
     def __str__(self):
         return "자모가 한글 정규식의 올바른 위치에 있지 않습니다."
+
+class NotCorrectLocationAtError(Exception):
+    def __str__(self):
+        return "'@'가 올바른 위치에 있지 않습니다."
+
+class DuplicateAtError(Exception):
+    def __str__(self):
+        return "중복된 '@'는 허용하지 않습니다."
+
 
 class HangeulRegex:
     def __init__(self, onset, nucleus, coda, multiprocess):
@@ -55,13 +72,24 @@ class HangeulRegex:
 
                 # preprocssing for making common regex
                 # reshape two dimension to one dimension
-                self.word_combination = self.word_combination.reshape((self.word_combination.size,))
+                # self.word_combination = self.word_combination.reshape((self.word_combination.size,))
 
                 # split data for multiprocessing
+                self.word_combination = list(chain.from_iterable(self.word_combination))
+
                 splited_word_combination = np.array_split(self.word_combination, num_cores)
 
+                # print(self.word_combination)
                 # multiprocessing for making common regex
-                self.common_regex = parmap.map(self.make_combination, splited_word_combination, pm_pbar=True, pm_processes=num_cores)
+                # with Pool(num_cores) as pool:
+                #     self.common_regex = pool.starmap(self.make_common_regex, zip(splited_word_combination))
+                self.common_regex = parmap.map(self.make_common_regex, splited_word_combination, pm_pbar=True, pm_processes=num_cores)
+
+                # 1d list to oen string
+                temp_string = ""
+                for regex in self.common_regex:
+                    temp_string += regex
+                self.common_regex = temp_string
             else:
                 self.make_combination()
                 self.make_common_regex()
@@ -75,22 +103,14 @@ class HangeulRegex:
         if self.multiprocess:
             common_regex = ""
             for idx1 in range(word_combination.size):
-                for idx2 in range(word_combination.size):
-                    if idx1 == idx2:
-                        common_regex += "(" + word_combination[idx1] + ")+|"
-                    else:
-                        common_regex += "(" + word_combination[idx1] + ")(" + word_combination[idx2] + ")+|"
-                        common_regex += "(" + word_combination[idx2] + ")(" + word_combination[idx1] + ")+|"
+                    common_regex += "(" + word_combination[idx1] + ")+|"
+                    
             return common_regex
         else:
-            print(self.word_combination)
+            # print(self.word_combination)
             for idx1 in range(len(self.word_combination)):
-                for idx2 in range(len(self.word_combination)):
-                    if idx1 == idx2:
-                        self.common_regex += "(" + self.word_combination[idx1] + ")+|"
-                    else:
-                        self.common_regex += "(" + self.word_combination[idx1] + ")(" + self.word_combination[idx2] + ")+|"
-                        self.common_regex += "(" + self.word_combination[idx2] + ")(" + self.word_combination[idx1] + ")+|"
+                self.common_regex += "(" + self.word_combination[idx1] + ")+|"
+                
                 
     def make_combination(self): 
         # print(onset, nucleus, coda)
@@ -114,18 +134,40 @@ class HangeulRegex:
                 
         if self.multiprocess:
             num_cores = multiprocessing.cpu_count()
-            print("num_cores = %d" % (num_cores))
+            # print("num_cores = %d" % (num_cores))
 
             # preprocessing for making combination
             # split data for multiprocessing
-            splited_onset = np.array_split(self.onset, num_cores)
-            splited_onset = [item.tolist() for item in splited_onset]
+            splited_onset = None
+            splited_nucleus = None
+            splited_coda = None
 
-            splited_nucleus = np.array_split(self.nucleus, num_cores)
-            splited_nucleus = [item.tolist() for item in splited_nucleus]
+            # find longest set
+            if len(self.onset) >= len(self.nucleus) and len(self.onset) >= len(self.coda):
+                # onset is longest
+                splited_onset = np.array_split(self.onset, num_cores)
+                splited_onset = [item.tolist() for item in splited_onset]
 
-            splited_coda = np.array_split(self.coda, num_cores)
-            splited_coda = [item.tolist() for item in splited_coda]
+                with Pool(num_cores) as pool:
+                    self.word_combination = pool.starmap(self._combination_workder, zip(splited_onset, repeat(self.nucleus), repeat(self.coda),
+                    repeat(jaso.onsets), repeat(jaso.nuclei), repeat(jaso.codas)))
+            elif len(self.nucleus) >= len(self.onset) and len(self.nucleus) >= len(self.coda):
+                # nucleus is longest
+                splited_nucleus = np.array_split(self.nucleus, num_cores)
+                splited_nucleus = [item.tolist() for item in splited_nucleus]
+
+                with Pool(num_cores) as pool:
+                    self.word_combination = pool.starmap(self._combination_workder, zip(repeat(self.onset), splited_nucleus, repeat(self.coda),
+                    repeat(jaso.onsets), repeat(jaso.nuclei), repeat(jaso.codas)))
+            else:
+                # coda is longest
+                splited_coda = np.array_split(self.coda, num_cores)
+                # splited_coda = [item.tolist() for item in splited_coda]
+
+                with Pool(num_cores) as pool:
+                    self.word_combination = pool.starmap(self._combination_workder, zip(repeat(self.onset), repeat(self.nucleus), splited_coda,
+                    repeat(jaso.onsets), repeat(jaso.nuclei), repeat(jaso.codas)))
+                # pool.join()
 
             # print(splited_onset, splited_nucleus, splited_coda)
             
@@ -133,22 +175,22 @@ class HangeulRegex:
             # word_combination = [ [first thread's result], [second thread's result], ... ]
             # self.word_combination = parmap.starmap(self._combination_workder, splited_onset, splited_nucleus, splited_coda,
             #     jaso.onsets, jaso.nuclei, jaso.codas, pm_pbar=True, pm_processes=num_cores)
-            pool = Pool(num_cores)
-            self.word_combination = pool.starmap(self._combination_workder, zip(splited_onset, splited_nucleus, splited_coda,
-                jaso.onsets, jaso.nuclei, jaso.codas))
+            # pool = Pool(num_cores)
+            # self.word_combination = pool.starmap(self._combination_workder, zip(splited_onset, splited_nucleus, splited_coda,
+            #     jaso.onsets, jaso.nuclei, jaso.codas))
         else:
             self.word_combination = self._combination_workder(self.onset, self.nucleus, self.coda, jaso.onsets, jaso.nuclei, jaso.codas)
-            print(self.word_combination)
+            # print(self.word_combination)
 
     def _combination_workder(self, onset, nucleus, coda, onsets, nuclei, codas):
         word_combination = []
     
-        print("onset = ", onset)
-        print("nucleus = ", nucleus)
-        print("coda = ", coda)
-        print()
+        # print("onset = ", onset)
+        # print("nucleus = ", nucleus)
+        # print("coda = ", coda)
+        # print()
 
-        for on in onset:
+        for on in tqdm(onset, desc="calculating combination :"):
             for nu in nucleus:
                 for cd in coda:
                     # calculate ordering in unicode
@@ -166,6 +208,8 @@ class HangeulRegex:
                     # print(on, nu, cd)
                     on_num = onsets.index(on)
                     nu_num = nuclei.index(nu)
+                    if cd == '@':
+                        cd_num = 0
                     cd_num = codas.index(cd)
 
                     # print(on_num, nu_num, cd_num)
@@ -176,16 +220,18 @@ class HangeulRegex:
         return word_combination
 
 class Regex:
-    def __init__(self, input_regex, multiprocess):
+    def __init__(self, input_regex, multiprocess, using_vscode):
         self.input_regex = input_regex
         self.multiprocess = multiprocess
         self.output_regex = ""
+        self.using_vscode = using_vscode
 
         self.HangeulRegex_list = []        
         self.lock = Lock()
         self.q = Queue()
 
-        self.make_HangeulRegex()
+        self.regex_validation = self.make_HangeulRegex()
+            
     def _worker(self, lock, q, onset, nucleus, coda, num):
         regex = HangeulRegex(onset, nucleus, coda, self.multiprocess)
         
@@ -209,6 +255,9 @@ class Regex:
 
         # 0 < comma_count <= 2
         comma_count = 0
+
+        # must be zero or one
+        at_count = 0
     
         try:
             for target in self.input_regex: 
@@ -253,7 +302,9 @@ class Regex:
                             # target is choseong
                             if syllable_flag == 1:
                                 if target in onset:
-                                    raise DuplicateHangeulError                                    
+                                    raise DuplicateHangeulError
+                                elif target == '@':
+                                    raise NotCorrectLocationAtError                                    
                                 elif target in jaso.onsets:
                                     onset.append(target)
                                 else:
@@ -262,6 +313,8 @@ class Regex:
                             elif syllable_flag == 2:
                                 if target in nucleus:
                                     raise DuplicateHangeulError
+                                elif target == '@':
+                                    raise NotCorrectLocationAtError
                                 elif target in jaso.nuclei:
                                     nucleus.append(target)
                                 else:
@@ -270,6 +323,8 @@ class Regex:
                             elif syllable_flag == 3:
                                 if target in coda:
                                     raise DuplicateHangeulError
+                                elif target == '@' and at_count == 1:
+                                    raise DuplicateAtError
                                 elif target in jaso.codas:
                                     coda.append(target)
                                 else:
@@ -285,6 +340,7 @@ class Regex:
             # = syntax error
             if angle_bracket_stack:
                 raise AngleBracketError
+            
         except AngleBracketError as error:
             print(error)
             return False
@@ -300,15 +356,24 @@ class Regex:
         except NotCorrectLocationHangeulError as error:
             print(error)
             return False
+        except NotCorrectLocationAtError as error:
+            print(error)
+            return False
 
         self.merge_regex()
+        return True
+        
 
     def get_regex(self):
-        return self.output_regex
+        if self.regex_validation:
+            return self.output_regex
+        else:
+            return "Check regex is correct."
 
     # merge regex to common regex
     def merge_regex(self):
-        self.output_regex += "/"
+        if not self.using_vscode:
+            self.output_regex += "/"
 
         if self.multiprocess:
             input_regex_num = len(self.HangeulRegex_list)
@@ -324,15 +389,18 @@ class Regex:
             mp_regex_list.sort(key = operator.itemgetter(0))
 
             for regex in mp_regex_list:
-                self.output_regex += "(" + regex[1] + ")"
+                self.output_regex += regex[1]
         else:
             for regex in self.HangeulRegex_list:
                 self.output_regex += "(" + regex.get_regex() + ")"
         
-        self.output_regex += "/g"
+        self.output_regex = self.output_regex[:-1]
+        
+        if not self.using_vscode:
+            self.output_regex += "/g"
 
     def check_hangeul(self, target):
-        hanCount = len(re.findall(u'[\u3130-\u318F\uAC00-\uD7FF]+', target))
+        hanCount = len(re.findall(u'[\u3130-\u318F\uAC00-\uD7FF]+|[\@]', target))
 
         return hanCount > 0
 
@@ -380,7 +448,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Hangeul Regex Contructor')
 
     parser.add_argument('-m', dest="multiprocess", help="computing using multiprocessing", action='store_true')
+    parser.add_argument('-vs', dest="vscode", help="remoev slash and global flag to copy&paste in vscode research", action='store_true')
+
     parser.set_defaults(multiprocess=False)
+    parser.set_defaults(vscode=False)
 
     parser.add_argument('regex', type=str,
                     help="<초성, 중성, 종성>의 형식으로 입력")
@@ -389,8 +460,10 @@ if __name__ == '__main__':
 
     print(args)
     start_time = time.time()
-    regex = Regex(args.regex, args.multiprocess)
+    regex = Regex(args.regex, args.multiprocess, args.vscode)
     end_time = time.time()
 
     print("elapsed time = %sms" % ((end_time - start_time) * 1000))
-    print(regex.get_regex())
+    
+    with open("Hangeul_regex.txt", 'w') as output_file:
+        output_file.write(regex.get_regex()) 
