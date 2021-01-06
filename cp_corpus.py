@@ -10,6 +10,8 @@ def convert_audio(origin_dir, origin_file_name, conversion_file_name):
         # result = subprocess.run([info_command], stdout=subprocess.PIPE)
         # print(result.stdout)
         
+        origin_extension = origin_file_name[-4:]
+        conversion_extension = ".wav"
         audio_name_without_extension = conversion[:-4]
         '''
         any audio format to wav file, pcm16bit, 1 channel, 16000 sample rate.
@@ -17,7 +19,7 @@ def convert_audio(origin_dir, origin_file_name, conversion_file_name):
         '''
         print()
         convert_command = "ffmpeg -i " + '"' + origin_dir + "/" + conversion + '" '\
-                            + "-acodec pcm_s16le -ar 16000 " \
+                            + "-y -acodec pcm_s16le -ar 16000 " \
                             + "-ac 1 " \
                             + '"' + origin_dir + "/" + audio_name_without_extension + ".wav" + '"'
         print()
@@ -25,9 +27,10 @@ def convert_audio(origin_dir, origin_file_name, conversion_file_name):
         os.system(convert_command)
         print()
 
-        rm_commnd = "rm " + '"' + origin_dir + "/" + conversion + '"'
-        os.system(rm_commnd)
-        print(rm_commnd)
+        if origin_extension != conversion_extension:
+            rm_commnd = "rm " + '"' + origin_dir + "/" + conversion + '"'
+            os.system(rm_commnd)
+            print(rm_commnd)
 
 def get_file_name(xlsx_ws, num, meta_start_num):
     origin_file_name = []
@@ -139,18 +142,25 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    load_wb = load_workbook("data.xlsx", data_only=True)
+    load_wb = load_workbook("data2.xlsx", data_only=True)
     
     nu_pa = load_wb['나사렛대PA']
     nu_pm = load_wb['나사렛대PM']
     nu_nc = load_wb['나사렛대NC']
 
-    path = 'audio/nu/pa-nu'
-    origin_file_name, conversion_file_name, origin_meta_name, conversion_meta_name = get_file_name(nu_pa, 50, 53)
+    # path = 'audio/nu/pa-nu'
+    path = '/data/corpus/voice-data/working/nu/voice-files/pa-nu'
+    origin_file_name, conversion_file_name, origin_meta_name, conversion_meta_name = get_file_name(nu_pa, 50, 52)
     convert(origin_file_name, conversion_file_name, path, origin_meta_name, conversion_meta_name, args.audio, args.meta)
 
-    path = 'audio/nu/pm-nu'
-    origin_file_name, conversion_file_name, origin_meta_name, conversion_meta_name = get_file_name(nu_pm, 56, 59)
+    # path = 'audio/nu/pm-nu'
+    path = '/data/corpus/voice-data/working/nu/voice-files/pm-nu'
+    origin_file_name, conversion_file_name, origin_meta_name, conversion_meta_name = get_file_name(nu_pm, 56, 58)
+    convert(origin_file_name, conversion_file_name, path, origin_meta_name, conversion_meta_name, args.audio, args.meta)
+
+    # path = 'audio/nu/nc-nu'
+    path = '/data/corpus/voice-data/working/nu/voice-files/nc-nu'
+    origin_file_name, conversion_file_name, origin_meta_name, conversion_meta_name = get_file_name(nu_nc, 120, 123)
     convert(origin_file_name, conversion_file_name, path, origin_meta_name, conversion_meta_name, args.audio, args.meta)
 
     # rm -rf audio/nu/pa-nu/*
